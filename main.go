@@ -13,6 +13,8 @@ import (
 	"firebase.google.com/go"
 	"time"
 	"context"
+	"contrib.go.opencensus.io/exporter/stackdriver"
+	"go.opencensus.io/trace"
 )
 
 // map[string]interfaceをパースした際にjsonNumberをstringで受けたいのでjson.Numberを利用する
@@ -58,18 +60,18 @@ func loadEnv(){
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := trace.StartSpan(context.Background(), "html response")
+	defer span.End()
+
 	fmt.Fprintf(w, "OK")
 	fmt.Printf("response returned\n")
 }
 
-func decodeBody(res *http.Response, out interface{}) error {
-	defer res.Body.Close()
-	decoder := json.NewDecoder(res.Body)
-	return decoder.Decode(out)
-}
-
 // GetCoinMarketInfos ...
-func GetCoinMarketInfos() ([]CoinMarketInfoResponse, error) {
+func GetCoinMarketInfos(ctx context.Context) ([]CoinMarketInfoResponse, error) {
+	_, span := trace.StartSpan(ctx, "getCMCInfos")
+	defer span.End()
+
 	url := "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?limit=30"
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -108,8 +110,11 @@ func GetCoinMarketInfos() ([]CoinMarketInfoResponse, error) {
 	return coinMarketInfos, nil
 }
 
-func processTick(client *firestore.Client, ctx context.Context) {
-	infos, err := GetCoinMarketInfos()
+func processTick(client *firestore.Client) {
+	ctx, span := trace.StartSpan(context.Background(), "processTick.naive")
+	defer span.End()
+
+	infos, err := GetCoinMarketInfos(ctx)
 	if err != nil {
 		log.Printf("error: %+v", err)
 		return
@@ -139,8 +144,11 @@ func processTick(client *firestore.Client, ctx context.Context) {
 	fmt.Printf("market info is updated.\n")
 }
 
-func batchProcessTick(client *firestore.Client, ctx context.Context) {
-	infos, err := GetCoinMarketInfos()
+func batchProcessTick(client *firestore.Client) {
+	ctx, span := trace.StartSpan(context.Background(), "processTick.batch")
+	defer span.End()
+
+	infos, err := GetCoinMarketInfos(ctx)
 	if err != nil {
 		log.Printf("error: %+v", err)
 		return
@@ -163,6 +171,15 @@ func batchProcessTick(client *firestore.Client, ctx context.Context) {
 
 func main() {
 	loadEnv()
+
+	exporter, err := stackdriver.NewExporter(stackdriver.Options{
+		ProjectID: os.Getenv("PROJECT_ID"),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	trace.RegisterExporter(exporter)
+
 	ctx := context.Background()
 	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: os.Getenv("PROJECT_ID")})
 	if err != nil {
@@ -179,10 +196,10 @@ func main() {
 			select {
 			case <-ticker.C:
 				fmt.Printf("tick.\n")
-				processTick(client, ctx)
+				processTick(client)
 			case <- ticker2.C:
 				fmt.Println("tick2")
-				batchProcessTick(client, ctx)
+				batchProcessTick(client)
 			}
 		}
 	}()
