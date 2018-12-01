@@ -13,8 +13,11 @@ import (
 	"firebase.google.com/go"
 	"time"
 	"context"
-	"contrib.go.opencensus.io/exporter/stackdriver"
 	"go.opencensus.io/trace"
+	"go.opencensus.io/plugin/ochttp"
+	"go.opencensus.io/plugin/ochttp/propagation/tracecontext"
+	"contrib.go.opencensus.io/exporter/stackdriver"
+	"go.opencensus.io/stats/view"
 )
 
 // map[string]interfaceをパースした際にjsonNumberをstringで受けたいのでjson.Numberを利用する
@@ -46,8 +49,8 @@ type CoinMarketInfoResponse struct {
 	LastUpdated     string      `json:"last_updated"`
 }
 
-func loadEnv(){
-	err:= godotenv.Load("./.env")
+func loadEnv() {
+	err := godotenv.Load("./.env")
 	if err != nil {
 		log.Fatalf("error loading .env file: : %+v", err)
 	}
@@ -69,7 +72,7 @@ func mainHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetCoinMarketInfos ...
 func GetCoinMarketInfos(ctx context.Context) ([]CoinMarketInfoResponse, error) {
-	_, span := trace.StartSpan(ctx, "getCMCInfos")
+	ctx, span := trace.StartSpan(ctx, "getCMCInfos")
 	defer span.End()
 
 	url := "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?limit=30"
@@ -78,11 +81,13 @@ func GetCoinMarketInfos(ctx context.Context) ([]CoinMarketInfoResponse, error) {
 		return nil, errors.WithStack(err)
 	}
 	req.Header.Set("X-CMC_PRO_API_KEY", os.Getenv("APIKEY"))
-	client := new(http.Client)
-	resp, err := client.Do(req)
+
+	client := &http.Client{Transport: &ochttp.Transport{Propagation: &tracecontext.HTTPFormat{}}}
+	resp, err := client.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
 	var jsonMap map[string]interface{}
 	if err = json.NewDecoder(resp.Body).Decode(&jsonMap); err != nil {
 		return nil, errors.WithStack(err)
@@ -160,8 +165,8 @@ func batchProcessTick(client *firestore.Client) {
 		docRef := client.Doc(fmt.Sprintf("BatchMarket/%s", info.Symbol))
 		batch.Set(docRef, map[string]interface{}{
 			"Name": info.Name,
-			"Rank" : info.Rank,
-			"USD" : info.Quotes.USD.Price,
+			"Rank": info.Rank,
+			"USD":  info.Quotes.USD.Price,
 		})
 	}
 	batch.Commit(ctx)
@@ -179,6 +184,9 @@ func main() {
 		log.Fatal(err)
 	}
 	trace.RegisterExporter(exporter)
+	trace.ApplyConfig(trace.Config{DefaultSampler: trace.ProbabilitySampler(0.5)})
+	view.SetReportingPeriod(60 * time.Second)
+	view.RegisterExporter(exporter)
 
 	ctx := context.Background()
 	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: os.Getenv("PROJECT_ID")})
@@ -186,8 +194,6 @@ func main() {
 		log.Fatalf("failed to create new app")
 	}
 	client, err := app.Firestore(ctx)
-
-
 
 	ticker := time.NewTicker(2 * time.Minute)
 	ticker2 := time.NewTicker(3 * time.Minute)
@@ -197,7 +203,7 @@ func main() {
 			case <-ticker.C:
 				fmt.Printf("tick.\n")
 				processTick(client)
-			case <- ticker2.C:
+			case <-ticker2.C:
 				fmt.Println("tick2")
 				batchProcessTick(client)
 			}
