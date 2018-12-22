@@ -20,33 +20,19 @@ import (
 	"go.opencensus.io/stats/view"
 )
 
-// map[string]interfaceをパースした際にjsonNumberをstringで受けたいのでjson.Numberを利用する
-type Quote struct {
-	Price            json.Number `json:"price"`
-	Volume24h        json.Number `json:"volume_24h"`
-	MarketCap        json.Number `json:"market_cap"`
-	PercentChange1h  json.Number `json:"percent_change_1h"`
-	PercentChange24h json.Number `json:"percent_change_24h"`
-	PercentChange7d  json.Number `json:"percent_change_7d"`
-}
-
-type Quotes struct {
-	JPY Quote `json:"JPY"`
-	USD Quote `json:"USD"`
-	BTC Quote `json:"BTC"`
-}
-
-type CoinMarketInfoResponse struct {
+type CoinMarketInfo struct {
 	ID              int32       `json:"id"`
 	Name            string      `json:"name"`
 	Symbol          string      `json:"symbol"`
-	WebsiteSlug     string      `json:"slug"`
 	Rank            int32       `json:"cmc_rank"`
-	AvailableSupply json.Number `json:"circulating_supply"`
-	TotalSupply     json.Number `json:"total_supply"`
-	MaxSupply       json.Number `json:"max_supply"`
-	Quotes          Quotes      `json:"quote"`
-	LastUpdated     string      `json:"last_updated"`
+}
+
+func mainHandler(w http.ResponseWriter, r *http.Request) {
+	_, span := trace.StartSpan(context.Background(), "html response")
+	defer span.End()
+
+	fmt.Fprintf(w, "OK")
+	fmt.Printf("response returned\n")
 }
 
 func loadEnv() {
@@ -62,20 +48,12 @@ func loadEnv() {
 	}
 }
 
-func mainHandler(w http.ResponseWriter, r *http.Request) {
-	_, span := trace.StartSpan(context.Background(), "html response")
-	defer span.End()
-
-	fmt.Fprintf(w, "OK")
-	fmt.Printf("response returned\n")
-}
-
 // GetCoinMarketInfos ...
-func GetCoinMarketInfos(ctx context.Context) ([]CoinMarketInfoResponse, error) {
-	ctx, span := trace.StartSpan(ctx, "getCMCInfos")
+func GetCoinMarketInfos(ctx context.Context) ([]CoinMarketInfo, error) {
+	_, span := trace.StartSpan(ctx, "getCMCInfos")
 	defer span.End()
 
-	url := "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?limit=30"
+	url := "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest?limit=10"
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -107,7 +85,7 @@ func GetCoinMarketInfos(ctx context.Context) ([]CoinMarketInfoResponse, error) {
 		return nil, errors.New(fmt.Sprintf("failed to parsing data object. jsonMap: %+v", jsonMap))
 	}
 
-	var coinMarketInfos []CoinMarketInfoResponse
+	var coinMarketInfos []CoinMarketInfo
 	err = utils.Parse(data, &coinMarketInfos)
 	if err != nil {
 		return nil, errors.WithStack(err)
@@ -125,24 +103,12 @@ func processTick(client *firestore.Client) {
 		return
 	}
 
-	//batch := client.Batch()
-	//for _, info := range infos {
-	//	fmt.Printf("add coin: %s\n", info.Symbol)
-	//	docRef := client.Doc(fmt.Sprintf("Market/%s", info.Symbol))
-	//	batch.Set(docRef, map[string]interface{}{
-	//		"Name": info.Name,
-	//		"Rank" : info.Rank,
-	//		"USD" : info.Quotes.USD.Price,
-	//	})
-	//}
-	//batch.Commit(ctx)
-
 	for _, info := range infos {
 		fmt.Printf("add coin: %s\n", info.Symbol)
 		client.Doc(fmt.Sprintf("Market/%s", info.Symbol)).Set(ctx, map[string]interface{}{
 			"Name": info.Name,
 			"Rank": info.Rank,
-			"USD":  info.Quotes.USD.Price,
+			"Symbol":  info.Symbol,
 		})
 	}
 
@@ -166,7 +132,7 @@ func batchProcessTick(client *firestore.Client) {
 		batch.Set(docRef, map[string]interface{}{
 			"Name": info.Name,
 			"Rank": info.Rank,
-			"USD":  info.Quotes.USD.Price,
+			"Symbol":  info.Symbol,
 		})
 	}
 	batch.Commit(ctx)
@@ -195,23 +161,17 @@ func main() {
 	}
 	client, err := app.Firestore(ctx)
 
-	ticker := time.NewTicker(2 * time.Minute)
-	ticker2 := time.NewTicker(3 * time.Minute)
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				fmt.Printf("tick.\n")
-				processTick(client)
-			case <-ticker2.C:
-				fmt.Println("tick2")
-				batchProcessTick(client)
-			}
+	ticker1 := time.NewTicker(1 * time.Minute)
+	ticker2 := time.NewTicker(1 * time.Minute)
+	fmt.Printf("start market info updater.\n")
+	for {
+		select {
+		case <-ticker1.C:
+			fmt.Println("tick1")
+			processTick(client)
+		case <-ticker2.C:
+			fmt.Println("tick2")
+			batchProcessTick(client)
 		}
-	}()
-	fmt.Printf("market info updater is started.\n")
-
-	fmt.Printf("main endpoint is added.\n")
-	http.HandleFunc("/", mainHandler)
-	log.Fatal(http.ListenAndServe(":10000", nil))
+	}
 }
