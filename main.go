@@ -17,7 +17,6 @@ import (
 	"go.opencensus.io/plugin/ochttp"
 	"go.opencensus.io/plugin/ochttp/propagation/tracecontext"
 	"contrib.go.opencensus.io/exporter/stackdriver"
-	"go.opencensus.io/stats/view"
 )
 
 type CoinMarketInfo struct {
@@ -151,8 +150,8 @@ func main() {
 	}
 	trace.RegisterExporter(exporter)
 	trace.ApplyConfig(trace.Config{DefaultSampler: trace.ProbabilitySampler(0.5)})
-	view.SetReportingPeriod(60 * time.Second)
-	view.RegisterExporter(exporter)
+	//view.SetReportingPeriod(60 * time.Second)
+	//view.RegisterExporter(exporter)
 
 	ctx := context.Background()
 	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: os.Getenv("PROJECT_ID")})
