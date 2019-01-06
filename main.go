@@ -9,7 +9,6 @@ import (
 	"os"
 	"encoding/json"
 	"github.com/pkg/errors"
-	"github.com/GincoInc/go-global/utils"
 	"firebase.google.com/go"
 	"time"
 	"context"
@@ -85,9 +84,13 @@ func GetCoinMarketInfos(ctx context.Context) ([]CoinMarketInfo, error) {
 	}
 
 	var coinMarketInfos []CoinMarketInfo
-	err = utils.Parse(data, &coinMarketInfos)
+	b, err := json.Marshal(data)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
+	}
+	err = json.Unmarshal(b, &coinMarketInfos)
+	if err != nil {
+		return nil, err
 	}
 	return coinMarketInfos, nil
 }
